@@ -12,7 +12,7 @@
 
 ---
 
-> ⚠️ **Project status: Legacy / Archived.** This project was built during my undergraduate years (NIT Trichy) as a hands-on exercise in Unity gameplay programming. It has not been actively maintained since, targets an older Unity version, and is preserved here as-is for portfolio/case-study purposes. It is not a shipped or production title — treat the discussion below as an honest walkthrough of the engineering decisions actually present in the code, not a marketing pitch.
+> ⚠️ **Project status: Legacy / Archived.** This project was built during my undergraduate years (NIT Trichy) as a hands-on exercise in Unity gameplay programming. It has not been actively maintained since, and is shared primarily as a case study / portfolio reference.
 
 ---
 
@@ -25,15 +25,17 @@
 6. [Vendored / Third-Party Assets](#vendored--third-party-assets)
 7. [Known Limitations & What I'd Do Differently Today](#known-limitations--what-id-do-differently-today)
 8. [Running the Project](#running-the-project)
-9. [License](#license)
+9. [Contributing](#contributing)
+10. [Code of Conduct](#code-of-conduct)
+11. [License](#license)
 
 ---
 
 ## What This Project Actually Is
 
-A single-level, first-person zombie shooter: the player moves through a level (`Assets/level1.unity`), fights melee zombie enemies using switchable ranged weapons with per-weapon-type ammo pools, manages a decaying flashlight resource, and reaches a win/lose state via a trigger-based end zone or player death.
+A single-level, first-person zombie shooter: the player moves through a level (`Assets/level1.unity`), fights melee zombie enemies using switchable ranged weapons with per-weapon-type ammo pools, and can pick up ammo/battery resources scattered through the level. Combat is hitscan (`Physics.Raycast`), not projectile-based. Enemies use Unity's `NavMeshAgent` for pathing and a simple two-state (idle/provoked) behavior model driven by distance checks and damage events.
 
-It is intentionally scoped as a **systems-programming exercise**, not a full game — there is one level, no save system, no wave/spawner manager, and no menu flow beyond a game-over/reload screen. Everything documented below is verified directly against the C# source in `Assets/Game/`.
+It is intentionally scoped as a **systems-programming exercise**, not a full game — there is one level, no save system, no wave/spawner manager, and no menu flow beyond a game-over/reload screen.
 
 ## Tech Stack
 
@@ -60,42 +62,42 @@ It is intentionally scoped as a **systems-programming exercise**, not a full gam
 
 This is a coroutine-gated fire-rate limiter, not a full weapon-state system — there's no reload state, no burst-fire logic, no recoil pattern. It's a clean, minimal implementation of hitscan combat.
 
-**`WeaponSwitcher.cs`** — iterates `transform` children (each weapon is a child GameObject) and toggles `SetActive` based on a `currentWeapon` index, driven by number keys 1–4 or mouse scroll wheel (with wrap-around at both ends).
+**`WeaponSwitcher.cs`** — iterates `transform` children (each weapon is a child GameObject) and toggles `SetActive` based on a `currentWeapon` index, driven by number keys 1–4 or mouse scroll.
 
-**`WeaponZoom.cs`** — right-click toggles a zoom state that adjusts `Camera.fieldOfView` and simultaneously overwrites `RigidbodyFirstPersonController.mouseLook.XSensitivity/YSensitivity` — coupling FOV change to mouse sensitivity so aim feel stays consistent while zoomed.
+**`WeaponZoom.cs`** — right-click toggles a zoom state that adjusts `Camera.fieldOfView` and simultaneously overwrites `RigidbodyFirstPersonController.mouseLook.XSensitivity/YSensitivity` — coupling zoom to look sensitivity so aiming feels less jarring.
 
 ### Ammo Economy
 
 **`AmmoTypes.cs`** — a 4-value enum (`CARBINE`, `AK47`, `GLOCK`, `SHOTGUN`) used as a type key across the ammo system.
 
-**`Ammo.cs`** — holds a serialized array of a private nested `AmmoSlot` class (`{ AmmoType ammoType; int ammoAmount; }`), exposed to the Inspector. Public API is `GetCurrentAmmo`, `ReduceCurrentAmmo`, `IncreaseCurrentAmmo`, each doing a linear scan (`foreach`) over the slot array to find the matching type. State is only mutable through these three methods — the array itself and the nested class are effectively private implementation detail.
+**`Ammo.cs`** — holds a serialized array of a private nested `AmmoSlot` class (`{ AmmoType ammoType; int ammoAmount; }`), exposed to the Inspector. Public API is `GetCurrentAmmo`, `ReduceCurrentAmmo`, `IncreaseCurrentAmmo`.
 
 **`AmmoPickups.cs`** — on player trigger enter, plays a pickup sound, calls `FindObjectOfType<Ammo>().IncreaseCurrentAmmo(...)`, and destroys itself.
 
 ### Enemy AI
 
 **`EnemyAI.cs`** — the most involved script in the project. Each frame: computes `distanceToTarget` to the player, and if not dead:
-- If already `isProvoked`, calls `EngageTarget()`, which rotates to face the player (`FaceTarget()` via `Quaternion.Slerp`), then either chases (`NavMeshAgent.SetDestination`) or attacks depending on whether it's within `stoppingDistance + 1`.
+- If already `isProvoked`, calls `EngageTarget()`, which rotates to face the player (`FaceTarget()` via `Quaternion.Slerp`), then either chases (`NavMeshAgent.SetDestination`) or attacks depending on distance.
 - If not yet provoked, checks whether the player has entered `chaseRange` and flips `isProvoked = true`.
 - `OnDamage()` is a second, independent trigger into the provoked state, called reactively when the enemy takes damage (see below).
 - `EnemeyDie()` disables the `NavMeshAgent` once `EnemyHealth.IsDead()` is true, so a dead enemy stops pathing without needing to destroy the GameObject immediately (animation/ragdoll can still play).
 - `OnDrawGizmos()` visualizes `chaseRange` as a wire sphere in the editor — a small but genuine debug-tooling touch.
 
-This is a two-state behavior model (idle → provoked, with provoked branching into chase/attack based on distance) rather than a formal state machine class/enum — worth being precise about in an interview rather than calling it an "FSM," since there's no explicit state type or transition table.
+This is a two-state behavior model (idle → provoked, with provoked branching into chase/attack based on distance) rather than a formal state machine class/enum — worth being precise about in a technical write-up.
 
-**`EnemyHealth.cs`** — `TakeDamage()` calls `BroadcastMessage("OnDamage")` (a reflection-based, string-keyed message dispatch to all components on the GameObject) before applying damage, then triggers the `Animator`'s `die` state once hit points are depleted. `IsDead()` gates against re-processing death.
+**`EnemyHealth.cs`** — `TakeDamage()` calls `BroadcastMessage("OnDamage")` (a reflection-based, string-keyed message dispatch to all components on the GameObject) before applying damage, then tracks death state.
 
-**`EnemyAttack.cs`** — an Animator-event-driven attack: `AttackHitEvent()` is called from within the attack animation clip and applies damage to a cached `PlayerHealth` reference plus triggers a screen damage-flash via `DisplauDamage`.
+**`EnemyAttack.cs`** — an Animator-event-driven attack: `AttackHitEvent()` is called from within the attack animation clip and applies damage to a cached `PlayerHealth` reference plus triggers a hit reaction.
 
 ### Player State
 
 **`PlayerHealth.cs`** — decrements `hitPoints`, updates a TextMeshPro health readout, and calls `DeathHandler.HandleDeath()` at zero HP.
 
-**`DeathHandler.cs`** / **`EndGame.cs`** — both implement the same shutdown sequence independently: enable a game-over `Canvas`, freeze simulation via `Time.timeScale = 0`, unlock and show the cursor, and disable `WeaponSwitcher`/`Weapon` via `FindObjectOfType`. `EndGame` triggers this on a level-exit trigger collider; `DeathHandler` triggers it on player death. (Noted below as clear duplication — a legitimate refactor target.)
+**`DeathHandler.cs`** / **`EndGame.cs`** — both implement the same shutdown sequence independently: enable a game-over `Canvas`, freeze simulation via `Time.timeScale = 0`, unlock and show the cursor, disable player weapon scripts.
 
-**`DisplauDamage.cs`** — a coroutine-driven damage-flash: enables a screen-space `Canvas`, plays a hit sound, waits `impactTime` seconds, then disables it and stops the audio. Same coroutine-based timed-UI pattern as the weapon fire-rate gate.
+**`DisplauDamage.cs`** — a coroutine-driven damage-flash: enables a screen-space `Canvas`, plays a hit sound, waits `impactTime` seconds, then disables it and stops the audio. Same coroutine-based timing pattern as `Weapon.cs`.
 
-**`FlashLight.cs`** — models the flashlight as a decaying resource: every frame reduces `Light.spotAngle` and `Light.intensity` by fixed per-second rates until a floor angle is hit, with public `RestoreAngle`/`RestoreLight` methods for pickups to refill it.
+**`FlashLight.cs`** — models the flashlight as a decaying resource: every frame reduces `Light.spotAngle` and `Light.intensity` by fixed per-second rates until a floor angle is hit, with public methods to restore charge.
 
 **`BatteryPickups.cs`** — on player trigger, calls into `FlashLight` on the player's children to restore angle/intensity, mirroring the same pickup pattern as `AmmoPickups.cs`.
 
@@ -108,33 +110,33 @@ Written as an honest reflection on choices actually present in the code, framing
 ### Architectural Choices & Optimizations
 
 **Hitscan via Raycast instead of physical projectiles (`Weapon.cs`)**
-The `ProcessRayCast()` method applies damage directly to an `EnemyHealth` component via `Physics.Raycast` — no bullet Rigidbody is ever instantiated. This avoids the overhead of spawning a GameObject per shot, simulating its physics trajectory over multiple frames, and destroying it afterward. For a fast, straight-line weapon, a raycast gives an instant, deterministic hit result in a single call, which is a highly performant and standard choice.
+The `ProcessRayCast()` method applies damage directly to an `EnemyHealth` component via `Physics.Raycast` — no bullet Rigidbody is ever instantiated. This avoids the overhead of spawning a GameObject per shot and simulating bullet travel, at the cost of no travel-time/ballistics realism — an appropriate trade-off for a hitscan-style shooter.
 
 **Distance check gates expensive AI behavior (`EnemyAI.cs`)**
-The AI computes `Vector3.Distance` every frame; only when the player is within `chaseRange` does the script allow `NavMeshAgent.SetDestination()` to execute. `Vector3.Distance` is a cheap arithmetic operation, whereas NavMesh pathfinding is comparatively expensive. Gating the expensive pathfinding call behind a cheap arithmetic check ensures that idle, out-of-range enemies never trigger path sweeps—a deliberate and common optimization pattern.
+The AI computes `Vector3.Distance` every frame; only when the player is within `chaseRange` does the script allow `NavMeshAgent.SetDestination()` to execute. `Vector3.Distance` is a cheap arithmetic check, so gating the more expensive NavMesh pathing call behind it keeps idle enemies cheap.
 
 **Game-over handled by component mutation, not scene reloading (`DeathHandler.cs`)**
-`HandleDeath()` freezes the game by setting `Time.timeScale = 0`, unlocks the cursor, and disables `WeaponSwitcher` and `Weapon`. It intentionally does not call `SceneManager.LoadScene`. Freezing time and disabling a few scripts is a lightweight way to pause gameplay and show a UI, completely bypassing the heavy computational cost of unloading and reinstantiating every GameObject in the scene just to show a Game Over screen.
+`HandleDeath()` freezes the game by setting `Time.timeScale = 0`, unlocks the cursor, and disables `WeaponSwitcher` and `Weapon`. It intentionally does not call `SceneManager.LoadScene`. Freezing in place avoids the cost/latency of a reload and preserves the scene for a "game over" screen overlay.
 
 **Weapon switching via local transform hierarchy (`WeaponSwitcher.cs`)**
-The inventory iterates over its `transform` children and toggles `SetActive` based on an index. With a small, fixed number of weapon slots (at most 4 children), a simple linear scan over a bounded list is negligible in cost. This child-transform loop is significantly simpler and easier to reason about than a dictionary or Dependency Injection-based inventory system, perfectly matching the scale of the problem.
+The inventory iterates over its `transform` children and toggles `SetActive` based on an index. With a small, fixed number of weapon slots (at most 4 children), a simple linear scan over a bounded array is simpler and just as fast as a dictionary lookup.
 
 ### Known Anti-Patterns & Refactoring Opportunities
 
 **Coroutines for timed gates (`Weapon.cs`, `DisplauDamage.cs`) vs. a manual `Update()` timer.**
-Both scripts use `IEnumerator` + `WaitForSeconds` to gate a timed window (fire-rate cooldown, damage-flash duration). While this reads more linearly, it incurs a small per-call allocation from `new WaitForSeconds`. For fire-rate gating in a performance-sensitive shooter, tracking a `float timer` decremented in `Update()` avoids this allocation entirely and would be the preferred approach if I revisited this today.
+Both scripts use `IEnumerator` + `WaitForSeconds` to gate a timed window (fire-rate cooldown, damage-flash duration). While this reads more linearly, it incurs a small per-call allocation from `new WaitForSeconds(...)`; a cached timer field would avoid that allocation entirely.
 
 **`BroadcastMessage` in `EnemyHealth.TakeDamage()` vs. a direct method call or C# event.**
-`BroadcastMessage("OnDamage")` dispatches a string-keyed message to every component on the GameObject via reflection. This works, but it's slower than a direct call (reflection lookup every invocation) and has no compile-time safety. A direct reference (`enemyAI.OnDamage()`) or a C# `event` would be both faster and safer. This is a real, identifiable improvement opportunity.
+`BroadcastMessage("OnDamage")` dispatches a string-keyed message to every component on the GameObject via reflection. This works, but it's slower than a direct call (reflection lookup every invocation) and loses compile-time safety on the method name.
 
 **Duplicated shutdown logic in `DeathHandler.cs` and `EndGame.cs`.**
-Both scripts independently implement the exact same five-step sequence (enable canvas, freeze time, unlock cursor, disable weapon scripts). This is the clearest refactor candidate in the codebase — extracting a shared `GameStateController.Pause()`/`Resume()` would remove the duplication and give a single source of truth.
+Both scripts independently implement the exact same five-step sequence (enable canvas, freeze time, unlock cursor, disable weapon scripts). This is the clearest refactor candidate in the codebase — extract to a shared `GameOverController`.
 
 **`FindObjectOfType` for cross-script references vs. cached references.**
-Several scripts locate collaborators at runtime via `FindObjectOfType<T>()` rather than caching a reference once in `Start()`. While simple and effective for a single small level with sparse calls, it performs a scene-wide search on every call. Caching the reference once (as `EnemyAttack.cs` does) is the better default, and the codebase is currently inconsistent about which pattern it uses.
+Several scripts locate collaborators at runtime via `FindObjectOfType<T>()` rather than caching a reference once in `Start()`. While simple and effective for a single small level with sparse calls, it does not scale to larger scenes with many objects of the same type.
 
 **Distance-based two-state AI vs. a full scripted FSM.**
-Enemy behavior is governed by a bool (`isProvoked`) and distance comparisons, keeping logic short for a small enemy roster. However, this does not scale cleanly to more complex behaviors (e.g., flee, flank). At that point, an explicit state machine or Animator `StateMachineBehaviour` becomes the more maintainable choice.
+Enemy behavior is governed by a bool (`isProvoked`) and distance comparisons, keeping logic short for a small enemy roster. However, this does not scale cleanly to more complex behaviors (e.g., flee, flank, group coordination) without introducing a proper state machine.
 
 ## Repository Structure
 
@@ -180,7 +182,7 @@ In the interest of transparency, the following are **not original work** — the
 - `Assets/Standard Assets/` — Unity's official first-person controller package
 - `Assets/TextMesh Pro/` — Unity's official UI text package
 
-My original contribution is the gameplay logic in `Assets/Game/` (all C# scripts listed above), the wiring of these systems together in the level, and the integration of the third-party art/character packs into a working gameplay loop.
+My original contribution is the gameplay logic in `Assets/Game/` (all C# scripts listed above), the wiring of these systems together in the level, and the integration of the third-party art/character assets.
 
 ## Known Limitations & What I'd Do Differently Today
 
@@ -190,7 +192,7 @@ Being direct about this rather than hiding it:
 - **`BroadcastMessage` usage** in `EnemyHealth.cs` is a known anti-pattern (see trade-offs section) — would replace with a direct call or event.
 - **Duplicated pause/game-over logic** between `DeathHandler.cs` and `EndGame.cs` — would extract to a shared controller.
 - **Inconsistent reference-resolution strategy** (`FindObjectOfType` vs. cached fields) across pickup/attack scripts — would standardize on cached references or a lightweight service locator.
-- **No object pooling** for bullet impact effects or blood splatter prefabs — `Weapon.cs` calls `Instantiate`/`Destroy` per shot, which is fine at this project's scale but would need pooling under sustained fire against many enemies.
+- **No object pooling** for bullet impact effects or blood splatter prefabs — `Weapon.cs` calls `Instantiate`/`Destroy` per shot, which is fine at this project's scale but would need pooling under heavier fire rates.
 - **Large binary assets committed directly to Git** (multi-MB `.unity`/`.asset`/`.png` files) rather than via Git LFS — a consequence of when this was built, not current practice.
 - **Single hardcoded level**, no wave/spawn manager, no save system — scoped as a scripting exercise rather than a full game loop.
 
@@ -204,6 +206,14 @@ This is a legacy Unity project and has not been verified against current Unity L
 4. Open `Assets/level1.unity` and press Play.
 
 No guarantees are made about a clean import on first open, given the project's age — see [Known Limitations](#known-limitations--what-id-do-differently-today).
+
+## Contributing
+
+Contributions, bug reports, and suggestions are welcome even though this is a legacy/archived project. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+
+## Code of Conduct
+
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold it.
 
 ## License
 
